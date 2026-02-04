@@ -62,6 +62,8 @@ def process_and_save():
                     
                     # Reshape & Normalize
                     skel_data = raw.reshape(MAX_FRAMES, 25, 3)
+                    
+                    # --- CRITICAL FIX: NORMALIZATION ---
                     skel_data = normalize_skeleton(skel_data)
                     
                     # Transpose for PyTorch (Channels, Time, Joints)
@@ -84,8 +86,7 @@ def process_and_save():
     
     print(f"📊 Data Compiled: {len(X)} samples from {len(np.unique(groups))} patients.")
     
-    # --- STRATIFIED SUBJECT SPLIT ---
-    # Ensures a patient is NEVER in both Train and Test
+    # --- STRATIFIED SUBJECT SPLIT (Correct Way) ---
     splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
     train_idx, test_idx = next(splitter.split(X, Y, groups))
 
