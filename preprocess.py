@@ -2,83 +2,99 @@ import os
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit
 
-# --- CONFIGURATION ---
+# --- CONFIG ---
 SOURCE_DIR = "./data/processed/raw_csv/"
 OUTPUT_FILE = "mmasd_v1_frozen.npz"
-MAX_FRAMES = 300  # Fixed time length
+MAX_FRAMES = 300 
+
+def normalize_skeleton(data):
+    """
+    Centers the skeleton so the first frame's nose is at (0,0,0).
+    Removes positional bias.
+    """
+    first_frame_nose = data[0, 0, :] 
+    data = data - first_frame_nose
+    return data
 
 def process_and_save():
-    print(f"🔄 Starting Preprocessing: Filename Parsing Mode...")
+    print(f"🔄 Starting Preprocessing: Normalization + Subject Split...")
     
     data_list = []
     label_list = []
+    group_list = [] # Patient IDs
     
-    # 1. Walk through all files
+    if not os.path.exists(SOURCE_DIR):
+        print(f"❌ ERROR: Source directory '{SOURCE_DIR}' not found.")
+        return
+
+    # Walk through files
     for root, dirs, files in os.walk(SOURCE_DIR):
         for filename in tqdm(files, desc="Processing"):
             if filename.endswith(".csv"):
-                file_path = os.path.join(root, filename)
-                
                 try:
-                    # --- PARSE FILENAME FOR LABEL ---
+                    # --- PARSE FILENAME ---
                     clean_name = filename.replace(".csv", "")
                     parts = clean_name.split("_")
-                    last_part = parts[-1]
                     
-                    # Handle cases like "0 (1)"
-                    if " " in last_part: last_part = last_part.split(" ")[0]
-
-                    if not last_part.isdigit(): continue 
-
-                    label = int(last_part)
-
-                    # --- FILTER: BINARY CLASSIFICATION (0 vs 1) ---
+                    # Get Label
+                    label_str = parts[-1].split(" ")[0]
+                    if not label_str.isdigit(): continue
+                    label = int(label_str)
                     if label not in [0, 1]: continue
-
-                    # --- READ DATA ---
-                    df = pd.read_csv(file_path, header=None, dtype=str)
-                    df = df.apply(pd.to_numeric, errors='coerce')
-                    df = df.dropna(axis=1, how='all').dropna(axis=0, how='any')
-                    raw_data = df.values
                     
-                    # Ensure 75 columns
-                    if raw_data.shape[1] > 75: raw_data = raw_data[:, -75:]
-                    elif raw_data.shape[1] < 75: continue 
+                    # Get Patient ID (everything before label)
+                    patient_id = "_".join(parts[:-1]) 
 
-                    # Resize Time (T)
-                    T = raw_data.shape[0]
-                    if T > MAX_FRAMES:
-                        raw_data = raw_data[:MAX_FRAMES, :]
-                    elif T < MAX_FRAMES:
-                        padding = np.zeros((MAX_FRAMES - T, 75))
-                        raw_data = np.vstack((raw_data, padding))
+                    # --- LOAD DATA ---
+                    df = pd.read_csv(os.path.join(root, filename), header=None, dtype=str)
+                    df = df.apply(pd.to_numeric, errors='coerce').dropna(axis=1, how='all').dropna(axis=0, how='any')
+                    raw = df.values
                     
-                    # Reshape: (T, 25, 3) -> (3, T, 25)
-                    data = raw_data.reshape(MAX_FRAMES, 25, 3) 
-                    data = data.transpose(2, 0, 1)
+                    # Fix Columns (75)
+                    if raw.shape[1] > 75: raw = raw[:, -75:]
+                    elif raw.shape[1] < 75: continue 
+                    
+                    # Fix Time (300 Frames)
+                    if raw.shape[0] > MAX_FRAMES: raw = raw[:MAX_FRAMES, :]
+                    else: raw = np.vstack((raw, np.zeros((MAX_FRAMES - raw.shape[0], 75))))
+                    
+                    # Reshape & Normalize
+                    skel_data = raw.reshape(MAX_FRAMES, 25, 3)
+                    skel_data = normalize_skeleton(skel_data)
+                    
+                    # Transpose for PyTorch (Channels, Time, Joints)
+                    data = skel_data.transpose(2, 0, 1)
                     
                     data_list.append(data)
                     label_list.append(label)
-
+                    group_list.append(patient_id)
+                    
                 except Exception:
                     continue
 
-    # 2. Convert & Save
-    if len(data_list) == 0:
-        print("❌ ERROR: No files matched filters 0/1.")
+    if not data_list:
+        print("❌ Error: No valid data found.")
         return
 
-    X = np.stack(data_list) 
+    X = np.stack(data_list)
     Y = np.array(label_list)
-
-    print(f"📊 DATASET READY | Total: {X.shape[0]} | Typical: {np.sum(Y == 0)} | ASD: {np.sum(Y == 1)}")
+    groups = np.array(group_list)
     
-    # Stratified Split
-    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42, stratify=Y)
+    print(f"📊 Data Compiled: {len(X)} samples from {len(np.unique(groups))} patients.")
+    
+    # --- STRATIFIED SUBJECT SPLIT ---
+    # Ensures a patient is NEVER in both Train and Test
+    splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    train_idx, test_idx = next(splitter.split(X, Y, groups))
+
+    X_train, X_test = X[train_idx], X[test_idx]
+    Y_train, Y_test = Y[train_idx], Y[test_idx]
+
+    print(f"✅ Split Complete | Train: {len(X_train)} | Test: {len(X_test)}")
     np.savez(OUTPUT_FILE, X_train=X_train, Y_train=Y_train, X_test=X_test, Y_test=Y_test)
-    print(f"✅ Success! Saved to '{OUTPUT_FILE}'")
+    print(f"💾 Saved artifact: {OUTPUT_FILE}")
 
 if __name__ == "__main__":
     process_and_save()
