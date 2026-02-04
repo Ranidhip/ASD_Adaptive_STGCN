@@ -68,7 +68,7 @@ def process_and_save():
 
     # 2. Convert to Numpy Arrays
     if len(data_list) == 0:
-        print("❌ ERROR: No valid CSV files found/converted!")
+        print(" ERROR: No valid CSV files found/converted!")
         return
 
     X = np.stack(data_list) # Shape: (N, 3, T, 25, 1)
