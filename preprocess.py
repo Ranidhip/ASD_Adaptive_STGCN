@@ -11,15 +11,29 @@ MAX_FRAMES = 300
 
 def normalize_skeleton(data):
     """
-    Centers the skeleton so the first frame's nose is at (0,0,0).
-    Removes positional bias.
+    Advanced Normalization:
+    1. Centers the skeleton to (0,0,0).
+    2. SCALES the skeleton so everyone is the same size (1.0).
     """
-    first_frame_nose = data[0, 0, :] 
-    data = data - first_frame_nose
+    # data shape: (T, 25, 3)
+    
+    # 1. Center to the "Centroid" (Average of all joints) of the first frame
+    # This is more stable than just the nose.
+    center = np.mean(data[0], axis=0) 
+    data = data - center
+    
+    # 2. Scale Normalization (The Fix)
+    # Find the max distance of any joint from the center in the first frame
+    # This makes a tall child and a short child look identical mathematically.
+    max_dist = np.max(np.linalg.norm(data[0], axis=1))
+    
+    if max_dist > 0:
+        data = data / max_dist  # Now all coordinates are between -1 and 1
+        
     return data
 
 def process_and_save():
-    print(f"🔄 Starting Preprocessing: Normalization + Subject Split...")
+    print(f"🔄 Starting Preprocessing: Scale-Invariant Mode...")
     
     data_list = []
     label_list = []
@@ -44,7 +58,7 @@ def process_and_save():
                     label = int(label_str)
                     if label not in [0, 1]: continue
                     
-                    # Get Patient ID (everything before label)
+                    # Get Patient ID
                     patient_id = "_".join(parts[:-1]) 
 
                     # --- LOAD DATA ---
@@ -52,21 +66,17 @@ def process_and_save():
                     df = df.apply(pd.to_numeric, errors='coerce').dropna(axis=1, how='all').dropna(axis=0, how='any')
                     raw = df.values
                     
-                    # Fix Columns (75)
                     if raw.shape[1] > 75: raw = raw[:, -75:]
                     elif raw.shape[1] < 75: continue 
                     
-                    # Fix Time (300 Frames)
                     if raw.shape[0] > MAX_FRAMES: raw = raw[:MAX_FRAMES, :]
                     else: raw = np.vstack((raw, np.zeros((MAX_FRAMES - raw.shape[0], 75))))
                     
-                    # Reshape & Normalize
                     skel_data = raw.reshape(MAX_FRAMES, 25, 3)
                     
-                    # --- CRITICAL FIX: NORMALIZATION ---
+                    # --- APPLY NEW NORMALIZATION ---
                     skel_data = normalize_skeleton(skel_data)
                     
-                    # Transpose for PyTorch (Channels, Time, Joints)
                     data = skel_data.transpose(2, 0, 1)
                     
                     data_list.append(data)
@@ -84,18 +94,17 @@ def process_and_save():
     Y = np.array(label_list)
     groups = np.array(group_list)
     
-    print(f"📊 Data Compiled: {len(X)} samples from {len(np.unique(groups))} patients.")
+    print(f"📊 Data Compiled: {len(X)} samples.")
     
-    # --- STRATIFIED SUBJECT SPLIT (Correct Way) ---
+    # --- STRATIFIED SUBJECT SPLIT ---
     splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
     train_idx, test_idx = next(splitter.split(X, Y, groups))
 
     X_train, X_test = X[train_idx], X[test_idx]
     Y_train, Y_test = Y[train_idx], Y[test_idx]
 
-    print(f"✅ Split Complete | Train: {len(X_train)} | Test: {len(X_test)}")
     np.savez(OUTPUT_FILE, X_train=X_train, Y_train=Y_train, X_test=X_test, Y_test=Y_test)
-    print(f"💾 Saved artifact: {OUTPUT_FILE}")
+    print(f"✅ Saved normalized artifact: {OUTPUT_FILE}")
 
 if __name__ == "__main__":
     process_and_save()
