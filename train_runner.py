@@ -18,7 +18,7 @@ print(f"🚀 Training on: {DEVICE}")
 
 # --- 1. LOAD DATA ---
 if not os.path.exists(DATA_PATH):
-    raise FileNotFoundError(f"🚨 ERROR: '{DATA_PATH}' not found. Please upload it to the Colab/Repo folder.")
+    raise FileNotFoundError(f"🚨 ERROR: '{DATA_PATH}' not found. Run preprocess.py first.")
 
 print("📦 Loading dataset...")
 data = np.load(DATA_PATH)
@@ -36,7 +36,6 @@ class AdaptiveGraphConv(nn.Module):
     def __init__(self, in_channels, out_channels, num_nodes):
         super().__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1))
-        # The Learnable Matrix 'B' (This is your novelty!)
         self.B = nn.Parameter(torch.randn(num_nodes, num_nodes) * 1e-5, requires_grad=True)
 
     def forward(self, x):
@@ -51,14 +50,16 @@ class AdaptiveGraphConv(nn.Module):
 class AdaptiveSTGCN(nn.Module):
     def __init__(self, num_classes=2, num_joints=25):
         super().__init__()
-        # Layer 1
-        self.gcn1 = AdaptiveGraphConv(2, 64, num_joints)
+        # Layer 1 (Input Channels = 3 for X,Y,Z)
+        self.gcn1 = AdaptiveGraphConv(3, 64, num_joints)
         self.tcn1 = nn.Conv2d(64, 64, kernel_size=(9, 1), padding=(4, 0))
         self.bn1 = nn.BatchNorm2d(64)
+
         # Layer 2
         self.gcn2 = AdaptiveGraphConv(64, 128, num_joints)
         self.tcn2 = nn.Conv2d(128, 128, kernel_size=(9, 1), padding=(4, 0))
         self.bn2 = nn.BatchNorm2d(128)
+
         # Layer 3
         self.gcn3 = AdaptiveGraphConv(128, 256, num_joints)
         self.tcn3 = nn.Conv2d(256, 256, kernel_size=(9, 1), padding=(4, 0))
